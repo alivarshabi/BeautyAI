@@ -1,30 +1,41 @@
-import re
 import requests
 import streamlit as st
-from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="BeautyAI Pricing", layout="centered")
 
+API_URL = "https://bonbast.amirhn.com/latest"
+
+
 @st.cache_data(ttl=300)
 def get_euro_rate():
-    url = "https://www.bonbast.com/"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8",
-    }
+    response = requests.get(API_URL, timeout=10)
+    response.raise_for_status()
 
-    r = requests.get(url, headers=headers, timeout=10)
-    r.raise_for_status()
+    data = response.json()
 
-    text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
-    text = text.replace(",", "")
+    # معمولاً خروجی شامل کلید EUR یا eur است
+    possible_keys = ["EUR", "eur", "euro", "Euro"]
 
-    match = re.search(r"EUR\s*Euro\s*(\d{4,8})", text)
+    for key in possible_keys:
+        if key in data:
+            value = data[key]
 
-    if not match:
-        raise ValueError("Euro rate not found")
+            if isinstance(value, dict):
+                for sub_key in ["sell", "Sell", "price", "value", "rate"]:
+                    if sub_key in value:
+                        return int(str(value[sub_key]).replace(",", ""))
 
-    return int(match.group(1))
+            return int(str(value).replace(",", ""))
+
+    raise ValueError("Euro rate not found in API response")
+
+
+def format_toman(x):
+    return f"{x:,.0f} تومان"
+
+
+def format_euro(x):
+    return f"{x:,.2f} €"
 
 
 st.title("BeautyAI")
@@ -32,9 +43,10 @@ st.subheader("محاسبه‌گر قیمت تمام‌شده و قیمت پیش�
 
 try:
     eur_rate = get_euro_rate()
-    st.success(f"نرخ یورو زنده از Bonbast: {eur_rate:,.0f} تومان")
-except Exception:
-    st.warning("نرخ یورو خودکار دریافت نشد. لطفاً دستی وارد کن.")
+    st.success(f"نرخ یورو خودکار: {format_toman(eur_rate)}")
+except Exception as e:
+    st.warning("نرخ یورو خودکار دریافت نشد. نرخ را دستی وارد کن.")
+    st.caption(f"خطا: {e}")
     eur_rate = st.number_input("نرخ یورو به تومان", min_value=0, value=105000, step=1000)
 
 product_name = st.text_input("نام محصول", "KIKO 3D Hydra Lip Gloss")
@@ -62,10 +74,10 @@ st.divider()
 st.subheader("نتیجه")
 st.write(f"محصول: **{product_name}**")
 
-st.metric("نرخ یورو", f"{eur_rate:,.0f} تومان")
-st.metric("قیمت خرید با کمیسیون", f"{buy_with_commission_eur:,.2f} €")
-st.metric("هزینه ارسال", f"{shipping_cost_eur:,.2f} €")
-st.metric("قیمت تمام‌شده تهران - یورو", f"{final_cost_eur:,.2f} €")
-st.metric("قیمت تمام‌شده تهران - تومان", f"{final_cost_toman:,.0f} تومان")
-st.metric("سود فروشگاه", f"{profit_toman:,.0f} تومان")
-st.metric("قیمت پیشنهادی ما", f"{suggested_price:,.0f} تومان")
+st.metric("نرخ یورو", format_toman(eur_rate))
+st.metric("قیمت خرید با کمیسیون", format_euro(buy_with_commission_eur))
+st.metric("هزینه ارسال", format_euro(shipping_cost_eur))
+st.metric("قیمت تمام‌شده تهران - یورو", format_euro(final_cost_eur))
+st.metric("قیمت تمام‌شده تهران - تومان", format_toman(final_cost_toman))
+st.metric("سود فروشگاه", format_toman(profit_toman))
+st.metric("قیمت پیشنهادی ما", format_toman(suggested_price))
