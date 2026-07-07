@@ -1,83 +1,137 @@
+import re
 import requests
 import streamlit as st
+from bs4 import BeautifulSoup
+from urllib.parse import quote_plus, urljoin
 
-st.set_page_config(page_title="BeautyAI Pricing", layout="centered")
+st.set_page_config(page_title="BeautyAI", page_icon="💄", layout="centered")
 
-API_URL = "https://bonbast.amirhn.com/latest"
+SITES = [
+    "https://www.digikala.com/",
+    "https://ellicosmetic.ir/",
+    "https://saminbeauty.ir/",
+    "https://mohanacosmetic.com/",
+    "https://pharmaashop.com/",
+    "https://nolisse.ir/",
+    "https://beauty-lounge.ir/",
+    "https://www.ziba-moon.com/",
+]
 
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-@st.cache_data(ttl=300)
-def get_euro_rate():
-    response = requests.get(API_URL, timeout=10)
-    response.raise_for_status()
+def clean_number(text):
+    if text is None:
+        return ""
+    persian = "۰۱۲۳۴۵۶۷۸۹"
+    arabic = "٠١٢٣٤٥٦٧٨٩"
+    for i, d in enumerate(persian):
+        text = text.replace(d, str(i))
+    for i, d in enumerate(arabic):
+        text = text.replace(d, str(i))
+    return text
 
-    data = response.json()
+def extract_prices(text):
+    text = clean_number(text)
+    text = text.replace(",", "").replace("٬", "")
+    nums = re.findall(r"\d{5,12}", text)
 
-    # معمولاً خروجی شامل کلید EUR یا eur است
-    possible_keys = ["EUR", "eur", "euro", "Euro"]
+    prices = []
+    for n in nums:
+        p = int(n)
+        if 50_000 <= p <= 50_000_000:
+            prices.append(p)
+    return prices
 
-    for key in possible_keys:
-        if key in data:
-            value = data[key]
+def build_search_urls(site, query):
+    q = quote_plus(query)
 
-            if isinstance(value, dict):
-                for sub_key in ["sell", "Sell", "price", "value", "rate"]:
-                    if sub_key in value:
-                        return int(str(value[sub_key]).replace(",", ""))
+    if "digikala.com" in site:
+        return [f"https://www.digikala.com/search/?q={q}"]
 
-            return int(str(value).replace(",", ""))
+    return [
+        urljoin(site, f"?s={q}"),
+        urljoin(site, f"search?q={q}"),
+    ]
 
-    raise ValueError("Euro rate not found in API response")
+def get_market_prices(product_name):
+    results = []
 
+    for site in SITES:
+        for url in build_search_urls(site, product_name):
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=10)
+                if r.status_code != 200:
+                    continue
 
-def format_toman(x):
+                soup = BeautifulSoup(r.text, "html.parser")
+                text = soup.get_text(" ", strip=True)
+
+                prices = extract_prices(text)
+
+                if prices:
+                    results.append({
+                        "site": site,
+                        "url": url,
+                        "price": min(prices)
+                    })
+
+            except Exception:
+                continue
+
+    return results
+
+def round_price(price):
+    return round(price / 10000) * 10000
+
+def toman(x):
     return f"{x:,.0f} تومان"
 
+st.title("💄 BeautyAI")
 
-def format_euro(x):
-    return f"{x:,.2f} €"
+product_name = st.text_input("نام محصول")
 
+buy = st.number_input("قیمت خرید (€)", min_value=0.0, value=None, placeholder="مثلاً 8.5")
+rate = st.number_input("نرخ یورو (تومان)", min_value=0, value=None, placeholder="مثلاً 105000")
+commission = st.number_input("کمیسیون (%)", min_value=0.0, value=None, placeholder="مثلاً 10")
+weight = st.number_input("وزن (گرم)", min_value=0.0, value=None, placeholder="مثلاً 180")
+shipping = st.number_input("هزینه ارسال هر کیلو (€)", min_value=0.0, value=None, placeholder="مثلاً 3")
+profit = st.number_input("سود موردنظر (%)", min_value=0.0, value=None, placeholder="مثلاً 35")
 
-st.title("BeautyAI")
-st.subheader("محاسبه‌گر قیمت تمام‌شده و قیمت پیشنهادی فروش")
+if None not in (buy, rate, commission, weight, shipping, profit):
+    final_eur = buy * (1 + commission / 100) + (weight / 1000) * shipping
+    final_toman = final_eur * rate
+    raw_sell_price = final_toman * (1 + profit / 100)
+    sell_price = round_price(raw_sell_price)
 
-try:
-    eur_rate = get_euro_rate()
-    st.success(f"نرخ یورو خودکار: {format_toman(eur_rate)}")
-except Exception as e:
-    st.warning("نرخ یورو خودکار دریافت نشد. نرخ را دستی وارد کن.")
-    st.caption(f"خطا: {e}")
-    eur_rate = st.number_input("نرخ یورو به تومان", min_value=0, value=105000, step=1000)
-
-product_name = st.text_input("نام محصول", "KIKO 3D Hydra Lip Gloss")
-
-buy_price_eur = st.number_input("قیمت خرید به یورو", min_value=0.0, value=8.5, step=0.1)
-commission_percent = st.number_input("کمیسیون خریدار (%)", min_value=0.0, value=10.0, step=0.5)
-weight_gram = st.number_input("وزن محصول به گرم", min_value=0.0, value=180.0, step=10.0)
-shipping_per_kg_eur = st.number_input("هزینه ارسال به ازای هر کیلوگرم - یورو", min_value=0.0, value=3.0, step=0.5)
-profit_percent = st.number_input("سود موردنظر فروشگاه (%)", min_value=0.0, value=35.0, step=1.0)
-
-weight_kg = weight_gram / 1000
-
-commission_cost_eur = buy_price_eur * commission_percent / 100
-buy_with_commission_eur = buy_price_eur + commission_cost_eur
-shipping_cost_eur = weight_kg * shipping_per_kg_eur
-
-final_cost_eur = buy_with_commission_eur + shipping_cost_eur
-final_cost_toman = final_cost_eur * eur_rate
-
-profit_toman = final_cost_toman * profit_percent / 100
-suggested_price = final_cost_toman + profit_toman
+    st.divider()
+    st.metric("قیمت تمام‌شده (€)", f"{final_eur:,.2f}")
+    st.metric("قیمت تمام‌شده (تومان)", toman(final_toman))
+    st.metric("قیمت پیشنهادی BeautyAI", toman(sell_price))
 
 st.divider()
 
-st.subheader("نتیجه")
-st.write(f"محصول: **{product_name}**")
+if st.button("بررسی کف و سقف قیمت بازار"):
+    if not product_name:
+        st.warning("اول نام محصول را وارد کن.")
+    else:
+        with st.spinner("در حال بررسی بازار..."):
+            prices = get_market_prices(product_name)
 
-st.metric("نرخ یورو", format_toman(eur_rate))
-st.metric("قیمت خرید با کمیسیون", format_euro(buy_with_commission_eur))
-st.metric("هزینه ارسال", format_euro(shipping_cost_eur))
-st.metric("قیمت تمام‌شده تهران - یورو", format_euro(final_cost_eur))
-st.metric("قیمت تمام‌شده تهران - تومان", format_toman(final_cost_toman))
-st.metric("سود فروشگاه", format_toman(profit_toman))
-st.metric("قیمت پیشنهادی ما", format_toman(suggested_price))
+        if not prices:
+            st.error("قیمتی پیدا نشد. نام محصول را دقیق‌تر وارد کن.")
+        else:
+            market_prices = [p["price"] for p in prices]
+
+            min_price = min(market_prices)
+            max_price = max(market_prices)
+            avg_price = sum(market_prices) / len(market_prices)
+
+            st.subheader("قیمت بازار")
+            st.metric("کف قیمت بازار", toman(min_price))
+            st.metric("میانگین قیمت بازار", toman(avg_price))
+            st.metric("سقف قیمت بازار", toman(max_price))
+
+            with st.expander("جزئیات سایت‌ها"):
+                for item in prices:
+                    st.write(f"{item['site']} — {toman(item['price'])}")
+                    st.write(item["url"])
